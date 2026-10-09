@@ -1,0 +1,8 @@
+{
+  "name": "radar-bruxelles",
+  "version": "1.0.0",
+  "description": "Radar des avions en temps réel",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" }
+}
