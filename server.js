@@ -83,7 +83,9 @@ const airport = a => ({
   city: a.location || a.municipality || '',
   name: a.name || a.airport || '',
   iata: a.iata || '', icao: a.icao || '',
-  country: String(a.countryiso2 || a.country_code || '').toUpperCase()
+  country: String(a.countryiso2 || a.country_code || '').toUpperCase(),
+  lat: Number.isFinite(+(a.lat ?? a.latitude)) ? +(a.lat ?? a.latitude) : null,    // pour calculer l'heure d'arrivée
+  lon: Number.isFinite(+(a.lon ?? a.longitude)) ? +(a.lon ?? a.longitude) : null
 });
 
 async function getRoute(callsign, la, lo) {
@@ -116,8 +118,56 @@ async function getRoute(callsign, la, lo) {
   return out;
 }
 
+// ---------- Météo : observation réelle de la station la plus proche (METAR), sinon modèle Open-Meteo ----------
+const wxCache = new Map();
+const kmBetween = (la1, lo1, la2, lo2) => {
+  const r = Math.PI / 180, dLa = (la2 - la1) * r, dLo = (lo2 - lo1) * r;
+  const h = Math.sin(dLa / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin(dLo / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.sqrt(h));
+};
+function pickMetar(list, la, lo) {      // station la plus proche qui donne une température ; à égalité, l'observation la plus récente
+  let best = null;
+  for (const m of Array.isArray(list) ? list : []) {
+    if (m.temp === null || m.temp === undefined || !Number.isFinite(+m.temp) || !Number.isFinite(+m.lat) || !Number.isFinite(+m.lon)) continue;
+    const d = kmBetween(la, lo, +m.lat, +m.lon), ts = +m.obsTime || 0;
+    if (!best || d < best.d - 0.01 || (Math.abs(d - best.d) <= 0.01 && ts > best.ts)) best = { m, d, ts };
+  }
+  return best;
+}
+async function getWeather(la, lo) {
+  const key = la.toFixed(2) + ',' + lo.toFixed(2), hit = wxCache.get(key);
+  if (hit && Date.now() - hit.t < 600000) return hit.v;
+  let v = null;
+  try {   // 1) mesure réelle (aviationweather.gov, METAR des aéroports)
+    const dLa = 0.7, dLo = 0.7 / Math.cos(la * Math.PI / 180);
+    const j = await getJson('https://aviationweather.gov/api/data/metar?bbox=' + [la - dLa, lo - dLo, la + dLa, lo + dLo].map(x => x.toFixed(3)).join(',') + '&format=json&hours=3');
+    const b = pickMetar(j, la, lo);
+    if (b && b.d < 80) v = {
+      source: 'METAR', station: b.m.icaoId || '', name: b.m.name || '', distKm: Math.round(b.d), temp: +b.m.temp,
+      wind: Number.isFinite(+b.m.wspd) ? Math.round(+b.m.wspd * 1.852) : null,          // nœuds -> km/h
+      dir: Number.isFinite(+b.m.wdir) && b.m.wdir !== null ? +b.m.wdir : null,
+      obs: b.ts ? new Date(b.ts > 1e11 ? b.ts : b.ts * 1000).toISOString() : null };
+  } catch (e) { console.log('météo METAR :', e.message); }
+  if (!v) try {   // 2) secours : modèle de prévision (moins précis)
+    const j = await getJson('https://api.open-meteo.com/v1/forecast?latitude=' + la + '&longitude=' + lo + '&current=temperature_2m,wind_speed_10m,wind_direction_10m&wind_speed_unit=kmh');
+    v = { source: 'modèle', temp: j.current.temperature_2m, wind: j.current.wind_speed_10m, dir: j.current.wind_direction_10m };
+  } catch (e) { console.log('météo Open-Meteo :', e.message); }
+  if (v) console.log('météo :', v.source, v.station || '', v.temp + ' °C');
+  const out = v || { source: null };
+  wxCache.set(key, { t: v ? Date.now() : Date.now() - 540000, v: out });          // en cas d'échec : nouvel essai dans 1 minute
+  return out;
+}
+
 http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
+
+  if (u.pathname === '/api/weather') {
+    const la = parseFloat(u.searchParams.get('lat')), lo = parseFloat(u.searchParams.get('lon'));
+    if (Number.isNaN(la) || Number.isNaN(lo)) { res.writeHead(400); return res.end('lat/lon invalides'); }
+    const v = await getWeather(la, lo);
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify(v));
+  }
 
   if (u.pathname === '/api/route') {
     const cs = (u.searchParams.get('callsign') || '').trim().toUpperCase();
