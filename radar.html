@@ -66,8 +66,14 @@ html, body { margin:0; height:100%; background:#1b1d1f; overflow:hidden;
   text-align:center; cursor:pointer; color:var(--g); }
 #recenter { top:255px; } #place { top:297px; } #gpsbtn { top:339px; }
 #place.on { background:#3dff6a; color:#04140a; }
-#gnd, #veh, #sty, #sat { right:16px; top:423px; width:34px; height:34px; padding:0; font-size:16px; line-height:30px; text-align:center; cursor:pointer; }
-#sty { right:58px; top:255px; } #sat { right:58px; top:297px; }
+#gnd, #veh, #sty, #sat, #air { right:16px; top:423px; width:34px; height:34px; padding:0; font-size:16px; line-height:30px; text-align:center; cursor:pointer; }
+#sty { right:58px; top:255px; } #sat { right:58px; top:297px; } #air { right:58px; top:339px; }
+#airMenu { display:none; right:104px; top:255px; padding:5px 0; font-size:13px; z-index:1200; }
+#airMenu div { padding:6px 16px; white-space:nowrap; cursor:pointer; }
+#airMenu div:hover { background:rgba(61,255,106,.25); }
+.apt-wrap { overflow:visible; background:none; border:0; }
+.apt { position:absolute; transform:translate(-50%,-135%); background:rgba(8,22,14,.82); color:#7dff9a; border:1px solid #3dff6a;
+  border-radius:3px; font:bold 11px 'Courier New',monospace; padding:1px 5px; white-space:nowrap; pointer-events:none; }
 #sat.on { background:#3dff6a; color:#04140a; }
 #toast { left:50%; top:120px; transform:translateX(-50%); z-index:1200; opacity:0; transition:opacity .4s; pointer-events:none; font-size:14px; white-space:nowrap; }
 #toast.on { opacity:1; }
@@ -103,7 +109,8 @@ html { background:#000; }   /* le bord noir n'émet aucune lumière au plafond *
   #recenter { top:76px; } #place { top:114px; } #gpsbtn { top:152px; }
   #spd { right:10px; top:190px; width:30px; height:30px; font-size:10px; line-height:26px; }
   #gnd, #veh, #sty, #sat { right:10px; top:228px; width:30px; height:30px; font-size:14px; line-height:26px; }
-  #sty { right:46px; top:76px; } #sat { right:46px; top:114px; }
+  #sty { right:46px; top:76px; } #sat { right:46px; top:114px; } #air { right:46px; top:152px; }
+  #airMenu { right:84px; top:76px; }
   #wx { left:6px; bottom:6px; font-size:11px; line-height:1.35; max-width:55vw; } .wdirline, #diag { display:none; }
   #status { font-size:9px; }
   .tdetail { display:none; }
@@ -136,6 +143,8 @@ html { background:#000; }   /* le bord noir n'émet aucune lumière au plafond *
 <div class="panel" id="gnd" title="Avions au sol">🛬</div>
 <div class="panel" id="sty" title="Style de la carte">🎨</div>
 <div class="panel" id="sat" title="Carte satellite : cliquer pour activer / désactiver">🛰</div>
+<div class="panel" id="air" title="Aller voir un aéroport (Charleroi, Zaventem, Liège...)">🛫</div>
+<div class="panel" id="airMenu"></div>
 <div class="panel" id="toast"></div>
 <div class="panel" id="wx">
   TEMP : <span id="temp">--</span> °C<br>
@@ -174,6 +183,8 @@ html { background:#000; }   /* le bord noir n'émet aucune lumière au plafond *
      FIX_K ......... lissage du mouvement            SPEED ......... vitesse de départ (1 = réelle)
      CYCLE_S ....... durée d'un cycle en accéléré    MAX_NM ........ portée de départ (en NM)
      STYLES ........ styles de carte (filtres)       .pl { ... 52px  taille des avions
+     AEROPORTS ..... liste des aéroports du bouton 🛫 (ajoutez une ligne pour en ajouter un)
+     COMPTEUR_CODE . compteur anonyme de visites et d'installations (vide = désactivé)
    ===================================================================================== */
 /* ================= CONFIGURATION ================= */
 let   CENTER      = [50.8466, 4.3528];  // position par défaut (Bruxelles) ; remplacée par votre GPS
@@ -182,6 +193,8 @@ const RINGS_NM    = [20, 30, 50];       // ★ distances des cercles verts (en m
 const SWEEP_NM    = 50;                 // le faisceau va du centre jusqu'à ce cercle
 const REFRESH_MS  = 3000;               // ★ mise à jour des avions (en millisecondes)
 const SWEEP_SEC   = 5;                  // ★ durée d'un tour du faisceau en secondes (plus petit = plus rapide)
+/* ★★★ COMPTEUR ANONYME DE VISITES ET D'INSTALLATIONS (facultatif) ★★★ */
+const COMPTEUR_CODE = '';   // ★ Laissez VIDE = aucun compteur. Pour l'activer : mettez entre les guillemets le code de votre compte GRATUIT GoatCounter (ex. 'radar-17jq' si votre page de statistiques est radar-17jq.goatcounter.com)
 /* ★★★ COULEUR ET ASPECT DE LA TRAÎNÉE DES AVIONS (la queue derrière chaque avion) — modifiez ici ★★★ */
 const TRAINEE_HALO      = '200,225,255';   // ★ halo doux autour de la traînée : ROUGE,VERT,BLEU (chaque chiffre de 0 à 255). Ici : blanc glacé
 const TRAINEE_COEUR     = '245,250,255';   // ★ cœur de la traînée (le centre, plus clair). Ici : blanc glacé
@@ -631,13 +644,13 @@ function drawTrails() {
   }
 }
 
-const VERSION = 'v13';
+const VERSION = 'v15';
 let fpsN = 0, fpsT = 0, prevNow = 0;
 function frame(now) {
   const dt = prevNow ? Math.min(0.25, (now - prevNow) / 1000) : 0; prevNow = now;
   fpsN++;
   if (now - fpsT >= 1000) {                       // affichage : version, images par seconde, nombre d'avions
-    document.getElementById('ver').textContent = VERSION + ' · ' + Math.round(fpsN * 1000 / (now - fpsT)) + ' i/s · ' + planes.size + ' avions · ×' + SPEED;
+    document.getElementById('ver').textContent = VERSION + ' · ' + Math.round(fpsN * 1000 / (now - fpsT)) + ' i/s · ' + planes.size + ' avions · ×' + SPEED + (COMPTEUR_CODE ? ' · stats anonymes' : '');
     fpsN = 0; fpsT = now;
   }
   sweepAngle = (now / 1000 / SWEEP_SEC * 360) % 360;
@@ -813,6 +826,58 @@ installBtn.addEventListener('click', async () => {
   deferredInstall = null; installBtn.style.display = 'none';
 });
 window.addEventListener('appinstalled', () => { installBtn.style.display = 'none'; });
+
+/* ================= AÉROPORTS : raccourcis pour aller les voir (bouton 🛫) ================= */
+/* ★ LISTE DES AÉROPORTS : [nom affiché, code, latitude, longitude]. Pour en ajouter un, copiez une ligne et changez les valeurs. */
+const AEROPORTS = [
+  ['Zaventem (Bruxelles)',      'BRU', 50.9014, 4.4844],
+  ['Charleroi (Bruxelles-Sud)', 'CRL', 50.4592, 4.4538],
+  ['Liège',                     'LGG', 50.6374, 5.4432],
+  ['Anvers',                    'ANR', 51.1894, 4.4603],
+  ['Ostende-Bruges',            'OST', 51.1989, 2.8622],
+  ['Courtrai-Wevelgem',         'KJK', 50.8172, 3.2047]
+];
+const airBtn = document.getElementById('air'), airMenu = document.getElementById('airMenu');
+function goAirport(nom, la, lo) {
+  map.setView([la, lo], 13, { animate:false });
+  const d = polar(la, lo).d;                                      // distance (NM) entre vous et l'aéroport
+  let note = ' · à ' + Math.round(d) + ' NM de vous';
+  if (d + 3 > MAX_NM) {                                           // plus loin que la portée : on l'agrandit pour charger les avions de l'aéroport
+    const r = RANGES.find(x => x >= d + 3);
+    if (r) { MAX_NM = r; try { localStorage.setItem('radarRange', MAX_NM); } catch (e) {} refresh(); note += ' · portée ' + r + ' NM'; }
+    else note += ' · hors de portée (plus de ' + RANGES[RANGES.length - 1] + ' NM)';
+  }
+  toast.textContent = '🛫 ' + nom + note; toast.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => toast.classList.remove('on'), 2600);
+}
+AEROPORTS.forEach(([nom, code, la, lo]) => {
+  L.marker([la, lo], { interactive:false, keyboard:false, zIndexOffset:-500,
+    icon:L.divIcon({ className:'apt-wrap', html:'<span class="apt">✈ ' + code + '</span>', iconSize:[0, 0] }) }).addTo(map);   // étiquette sur la carte
+  const it = document.createElement('div'); it.textContent = '✈ ' + nom + ' (' + code + ')';
+  it.addEventListener('click', () => { airMenu.style.display = 'none'; goAirport(nom, la, lo); });
+  airMenu.appendChild(it);
+});
+const homeIt = document.createElement('div'); homeIt.textContent = '⌖ Ma position';
+homeIt.addEventListener('click', () => { airMenu.style.display = 'none'; fit(); });
+airMenu.appendChild(homeIt);
+airBtn.addEventListener('click', e => { e.stopPropagation(); airMenu.style.display = airMenu.style.display === 'block' ? 'none' : 'block'; });
+document.addEventListener('click', () => { airMenu.style.display = 'none'; });
+
+/* ================= COMPTEUR ANONYME (facultatif, désactivé tant que COMPTEUR_CODE est vide) ================= */
+(function () {
+  if (!COMPTEUR_CODE) return;                                          // vide = aucun compteur, rien n'est envoyé nulle part
+  if (navigator.doNotTrack === '1' || location.protocol === 'file:' || ['localhost', '127.0.0.1'].includes(location.hostname)) return;   // respecte « Ne pas me suivre » ; ignore vos essais sur le PC
+  const send = (path, title) => { try { if (window.goatcounter && window.goatcounter.count) window.goatcounter.count({ path, title, event:true }); } catch (e) {} };
+  const sc = document.createElement('script');
+  sc.async = true;
+  sc.dataset.goatcounter = 'https://' + COMPTEUR_CODE + '.goatcounter.com/count';               // la visite elle-même est comptée automatiquement
+  sc.src = 'https://gc.zgo.at/count.js';
+  sc.onload = () => {
+    const app = matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: fullscreen)').matches || navigator.standalone === true;
+    if (app) send('ouverture-appli-installee', "Ouverture depuis l'application installée");        // ouverture depuis l'icône de l'écran d'accueil
+  };
+  document.head.appendChild(sc);
+  window.addEventListener('appinstalled', () => send('installation', "Installation de l'application"));   // quelqu'un vient d'installer l'application
+})();
 </script>
 </body>
 </html>
